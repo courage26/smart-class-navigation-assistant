@@ -153,6 +153,12 @@ export default function TimetableScreen() {
   const [selectedDay, setSelectedDay] = useState<string>('Monday');
   // subjectName: text from the input box (controlled input).
   const [subjectName, setSubjectName] = useState('');
+  // startTime & endTime: user-provided start/end times for the class.
+  // These are simple text fields (e.g. "9:00 AM").
+  const [startTime, setStartTime] = useState('');
+  const [endTime, setEndTime] = useState('');
+  // room: room/location text input (e.g. "Room 204").
+  const [room, setRoom] = useState('');
   // inputError: short message when the user taps Add with an empty subject.
   const [inputError, setInputError] = useState('');
 
@@ -176,11 +182,19 @@ export default function TimetableScreen() {
 
     setInputError('');
 
+    // Build a time string from start/end values. If both are empty, use default.
+    const timeString = startTime.trim().length || endTime.trim().length
+      ? `${startTime.trim() || DEFAULT_ADDED_TIME} – ${endTime.trim() || ''}`.trim()
+      : DEFAULT_ADDED_TIME;
+
+    // Use provided room or fallback to a placeholder.
+    const roomString = room.trim().length ? room.trim() : DEFAULT_ADDED_ROOM;
+
     const newClass: TimetableClass = {
       id: `added-${Date.now()}`,
       name: trimmedName,
-      time: DEFAULT_ADDED_TIME,
-      room: DEFAULT_ADDED_ROOM,
+      time: timeString,
+      room: roomString,
     };
 
     // Immutable update: build a new array so React detects the change and re-renders.
@@ -192,8 +206,11 @@ export default function TimetableScreen() {
       )
     );
 
-    // Clear the input so you can type the next subject right away.
+    // Clear inputs so the form is ready for the next addition.
     setSubjectName('');
+    setStartTime('');
+    setEndTime('');
+    setRoom('');
   }
 
   return (
@@ -275,7 +292,68 @@ export default function TimetableScreen() {
                 accessibilityLabel="Subject name"
               />
 
-              {inputError.length > 0 ? (
+                {/* Start & End time inputs: side-by-side for easy entry */}
+                <View style={styles.smallRow}>
+                  <View style={{ flex: 1, marginRight: 8 }}>
+                    <ThemedText style={styles.formLabel}>Start time</ThemedText>
+                    <TextInput
+                      style={[
+                        styles.textInput,
+                        styles.smallInput,
+                        {
+                          backgroundColor: inputBackground,
+                          borderColor: cardBorder,
+                          color: inputTextColor,
+                        },
+                      ]}
+                      value={startTime}
+                      onChangeText={(text) => setStartTime(text)}
+                      placeholder="e.g. 9:00 AM"
+                      placeholderTextColor={placeholderColor}
+                      accessibilityLabel="Start time"
+                    />
+                  </View>
+
+                  <View style={{ flex: 1 }}>
+                    <ThemedText style={styles.formLabel}>End time</ThemedText>
+                    <TextInput
+                      style={[
+                        styles.textInput,
+                        styles.smallInput,
+                        {
+                          backgroundColor: inputBackground,
+                          borderColor: cardBorder,
+                          color: inputTextColor,
+                        },
+                      ]}
+                      value={endTime}
+                      onChangeText={(text) => setEndTime(text)}
+                      placeholder="e.g. 10:30 AM"
+                      placeholderTextColor={placeholderColor}
+                      accessibilityLabel="End time"
+                    />
+                  </View>
+                </View>
+
+                {/* Room input */}
+                <ThemedText style={styles.formLabel}>Room</ThemedText>
+                <TextInput
+                  style={[
+                    styles.textInput,
+                    {
+                      backgroundColor: inputBackground,
+                      borderColor: cardBorder,
+                      color: inputTextColor,
+                    },
+                  ]}
+                  value={room}
+                  onChangeText={(text) => setRoom(text)}
+                  placeholder="e.g. Room 204"
+                  placeholderTextColor={placeholderColor}
+                  accessibilityLabel="Room"
+                />
+
+                {inputError.length > 0 ? (
                 <ThemedText style={styles.errorText} lightColor="#B91C1C" darkColor="#FCA5A5">
                   {inputError}
                 </ThemedText>
@@ -381,6 +459,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: Platform.OS === 'ios' ? 12 : 10,
     fontSize: 16,
+  },
+  // smallRow and smallInput help lay out the start/end time fields neatly.
+  smallRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginTop: 6,
+  },
+  smallInput: {
+    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
   },
   errorText: {
     fontSize: 14,
