@@ -22,8 +22,15 @@ import { useThemeColor } from '@/hooks/use-theme-color';
 type TimetableClass = {
   id: string;
   name: string;
-  time: string;
-  room: string;
+  // store separate start/end times for new classes
+  startTime?: string;
+  endTime?: string;
+  // store building and room number separately for new classes
+  building?: string;
+  roomNumber?: string;
+  // legacy support for sample data already present in the app
+  time?: string;
+  room?: string;
 };
 
 type DaySchedule = {
@@ -34,6 +41,17 @@ type DaySchedule = {
 /** Placeholder text for classes you add with the button (change anytime below). */
 const DEFAULT_ADDED_TIME = 'Time not set';
 const DEFAULT_ADDED_ROOM = 'TBD';
+
+const BUILDINGS = [
+  'Changhak Hall',
+  'Future Hall',
+  'Imagination Hall',
+  'International Hall',
+  'Dasan Hall',
+  'Frontier Hall',
+  '100th Anniversary Hall',
+  'Dareuk Hall',
+];
 
 /** Starting week — copied into state once when the screen loads. */
 const INITIAL_WEEKLY_TIMETABLE: DaySchedule[] = [
@@ -75,6 +93,49 @@ const INITIAL_WEEKLY_TIMETABLE: DaySchedule[] = [
 
 const WEEKDAYS = INITIAL_WEEKLY_TIMETABLE.map((entry) => entry.day);
 
+/**
+ * Normalize a time input string into 24-hour HH:MM format.
+ * Accepts 9, 13, 930, 1330, and normal HH:MM values.
+ * Returns null for invalid inputs.
+ */
+function normalizeTimeInput(value: string): string | null {
+  const text = value.trim();
+  if (text.length === 0) {
+    return null;
+  }
+
+  // Allow plain 1-2 digit hour values like 9 or 13.
+  if (/^\d{1,2}$/.test(text)) {
+    const hour = Number(text);
+    if (hour >= 0 && hour <= 23) {
+      return `${hour.toString().padStart(2, '0')}:00`;
+    }
+    return null;
+  }
+
+  // Allow compact 3-4 digit values like 930 or 1330.
+  if (/^\d{3,4}$/.test(text)) {
+    const minutes = Number(text.slice(-2));
+    const hour = Number(text.slice(0, text.length - 2));
+    if (hour >= 0 && hour <= 23 && minutes >= 0 && minutes <= 59) {
+      return `${hour.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+    }
+    return null;
+  }
+
+  // Allow standard HH:MM values.
+  if (/^\d{1,2}:\d{2}$/.test(text)) {
+    const [hourText, minuteText] = text.split(':');
+    const hour = Number(hourText);
+    const minutes = Number(minuteText);
+    if (hour >= 0 && hour <= 23 && minutes >= 0 && minutes <= 59) {
+      return `${hour.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+    }
+  }
+
+  return null;
+}
+
 // -----------------------------------------------------------------------------
 // ONE CLASS ROW
 // -----------------------------------------------------------------------------
@@ -88,14 +149,22 @@ function ClassRow({
   isLast: boolean;
   dividerColor: string;
 }) {
+  const timeLabel = classItem.startTime && classItem.endTime
+    ? `${classItem.startTime} – ${classItem.endTime}`
+    : classItem.time || DEFAULT_ADDED_TIME;
+
+  const locationLabel = classItem.building
+    ? `${classItem.building}${classItem.roomNumber ? ` ${classItem.roomNumber}` : ''}`
+    : classItem.room || DEFAULT_ADDED_ROOM;
+
   return (
     <View
-      style={[styles.classRow, !isLast && { borderBottomWidth: 1, borderBottomColor: dividerColor }]}>
+      style={[styles.classRow, !isLast && { borderBottomWidth: 1, borderBottomColor: dividerColor }]}> 
       <ThemedText type="defaultSemiBold" style={styles.className}>
         {classItem.name}
       </ThemedText>
-      <ThemedText style={styles.classMeta}>{classItem.time}</ThemedText>
-      <ThemedText style={styles.classMeta}>{classItem.room}</ThemedText>
+      <ThemedText style={styles.classMeta}>{timeLabel}</ThemedText>
+      <ThemedText style={styles.classMeta}>{locationLabel}</ThemedText>
     </View>
   );
 }
@@ -153,13 +222,14 @@ export default function TimetableScreen() {
   const [selectedDay, setSelectedDay] = useState<string>('Monday');
   // subjectName: text from the input box (controlled input).
   const [subjectName, setSubjectName] = useState('');
-  // startTime & endTime: user-provided start/end times for the class.
-  // These are simple text fields (e.g. "9:00 AM").
+  // startTime/endTime: typed by the user and normalized before saving.
   const [startTime, setStartTime] = useState('');
   const [endTime, setEndTime] = useState('');
-  // room: room/location text input (e.g. "Room 204").
-  const [room, setRoom] = useState('');
-  // inputError: short message when the user taps Add with an empty subject.
+  // selectedBuilding: choose a building from the picker.
+  const [selectedBuilding, setSelectedBuilding] = useState<string>(BUILDINGS[0]);
+  // roomNumber: numeric room input only (e.g. 105).
+  const [roomNumber, setRoomNumber] = useState('');
+  // inputError: short message when the user taps Add with missing/invalid values.
   const [inputError, setInputError] = useState('');
 
   const cardBackground = useThemeColor({ light: '#F1F5F9', dark: '#252B32' }, 'background');
@@ -173,6 +243,8 @@ export default function TimetableScreen() {
   /** Runs when the user taps "Add class". */
   function handleAddClass() {
     const trimmedName = subjectName.trim();
+    const normalizedStartTime = normalizeTimeInput(startTime);
+    const normalizedEndTime = normalizeTimeInput(endTime);
 
     // Safe check: do not add blank or whitespace-only names.
     if (trimmedName.length === 0) {
@@ -180,21 +252,27 @@ export default function TimetableScreen() {
       return;
     }
 
+    // If the user typed any time, both times must be valid.
+    if ((startTime.trim().length > 0 || endTime.trim().length > 0) && (!normalizedStartTime || !normalizedEndTime)) {
+      setInputError('Please enter valid start and end times in 24-hour format.');
+      return;
+    }
+
+    // If one time is missing while the other is set, require both.
+    if ((startTime.trim().length > 0 && endTime.trim().length === 0) || (startTime.trim().length === 0 && endTime.trim().length > 0)) {
+      setInputError('Please enter both start time and end time, or leave both blank.');
+      return;
+    }
+
     setInputError('');
-
-    // Build a time string from start/end values. If both are empty, use default.
-    const timeString = startTime.trim().length || endTime.trim().length
-      ? `${startTime.trim() || DEFAULT_ADDED_TIME} – ${endTime.trim() || ''}`.trim()
-      : DEFAULT_ADDED_TIME;
-
-    // Use provided room or fallback to a placeholder.
-    const roomString = room.trim().length ? room.trim() : DEFAULT_ADDED_ROOM;
 
     const newClass: TimetableClass = {
       id: `added-${Date.now()}`,
       name: trimmedName,
-      time: timeString,
-      room: roomString,
+      startTime: normalizedStartTime ?? undefined,
+      endTime: normalizedEndTime ?? undefined,
+      building: selectedBuilding,
+      roomNumber: roomNumber.trim().length > 0 ? roomNumber.trim() : undefined,
     };
 
     // Immutable update: build a new array so React detects the change and re-renders.
@@ -210,7 +288,7 @@ export default function TimetableScreen() {
     setSubjectName('');
     setStartTime('');
     setEndTime('');
-    setRoom('');
+    setRoomNumber('');
   }
 
   return (
@@ -292,68 +370,126 @@ export default function TimetableScreen() {
                 accessibilityLabel="Subject name"
               />
 
-                {/* Start & End time inputs: side-by-side for easy entry */}
-                <View style={styles.smallRow}>
-                  <View style={{ flex: 1, marginRight: 8 }}>
-                    <ThemedText style={styles.formLabel}>Start time</ThemedText>
-                    <TextInput
+              {/* Pick building from a mobile-friendly list */}
+              <ThemedText style={styles.formLabel}>Building</ThemedText>
+              <View style={styles.buildingRow}>
+                {BUILDINGS.map((building) => {
+                  const isSelected = building === selectedBuilding;
+                  return (
+                    <Pressable
+                      key={building}
+                      onPress={() => setSelectedBuilding(building)}
                       style={[
-                        styles.textInput,
-                        styles.smallInput,
-                        {
-                          backgroundColor: inputBackground,
-                          borderColor: cardBorder,
-                          color: inputTextColor,
-                        },
+                        styles.dayChip,
+                        { borderColor: cardBorder },
+                        isSelected && { backgroundColor: accent, borderColor: accent },
                       ]}
-                      value={startTime}
-                      onChangeText={(text) => setStartTime(text)}
-                      placeholder="e.g. 9:00 AM"
-                      placeholderTextColor={placeholderColor}
-                      accessibilityLabel="Start time"
-                    />
-                  </View>
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: isSelected }}
+                      accessibilityLabel={`Select ${building}`}>
+                      <ThemedText
+                        style={[styles.dayChipText, isSelected && styles.dayChipTextSelected]}
+                        lightColor={isSelected ? '#FFFFFF' : undefined}
+                        darkColor={isSelected ? '#FFFFFF' : undefined}>
+                        {building}
+                      </ThemedText>
+                    </Pressable>
+                  );
+                })}
+              </View>
 
-                  <View style={{ flex: 1 }}>
-                    <ThemedText style={styles.formLabel}>End time</ThemedText>
-                    <TextInput
-                      style={[
-                        styles.textInput,
-                        styles.smallInput,
-                        {
-                          backgroundColor: inputBackground,
-                          borderColor: cardBorder,
-                          color: inputTextColor,
-                        },
-                      ]}
-                      value={endTime}
-                      onChangeText={(text) => setEndTime(text)}
-                      placeholder="e.g. 10:30 AM"
-                      placeholderTextColor={placeholderColor}
-                      accessibilityLabel="End time"
-                    />
-                  </View>
+              {/* Start & End time inputs: side-by-side for easy entry */}
+              <View style={styles.smallRow}>
+                <View style={{ flex: 1, marginRight: 8 }}>
+                  <ThemedText style={styles.formLabel}>Start time</ThemedText>
+                  <TextInput
+                    style={[
+                      styles.textInput,
+                      styles.smallInput,
+                      {
+                        backgroundColor: inputBackground,
+                        borderColor: cardBorder,
+                        color: inputTextColor,
+                      },
+                    ]}
+                    value={startTime}
+                    onChangeText={(text) => {
+                      setStartTime(text);
+                      if (inputError) {
+                        setInputError('');
+                      }
+                    }}
+                    onBlur={() => {
+                      const normalized = normalizeTimeInput(startTime);
+                      if (normalized) {
+                        setStartTime(normalized);
+                      }
+                    }}
+                    placeholder="e.g. 9, 09:00, 930, 13:30"
+                    placeholderTextColor={placeholderColor}
+                    keyboardType="numeric"
+                    accessibilityLabel="Start time"
+                  />
                 </View>
 
-                {/* Room input */}
-                <ThemedText style={styles.formLabel}>Room</ThemedText>
-                <TextInput
-                  style={[
-                    styles.textInput,
-                    {
-                      backgroundColor: inputBackground,
-                      borderColor: cardBorder,
-                      color: inputTextColor,
-                    },
-                  ]}
-                  value={room}
-                  onChangeText={(text) => setRoom(text)}
-                  placeholder="e.g. Room 204"
-                  placeholderTextColor={placeholderColor}
-                  accessibilityLabel="Room"
-                />
+                <View style={{ flex: 1 }}>
+                  <ThemedText style={styles.formLabel}>End time</ThemedText>
+                  <TextInput
+                    style={[
+                      styles.textInput,
+                      styles.smallInput,
+                      {
+                        backgroundColor: inputBackground,
+                        borderColor: cardBorder,
+                        color: inputTextColor,
+                      },
+                    ]}
+                    value={endTime}
+                    onChangeText={(text) => {
+                      setEndTime(text);
+                      if (inputError) {
+                        setInputError('');
+                      }
+                    }}
+                    onBlur={() => {
+                      const normalized = normalizeTimeInput(endTime);
+                      if (normalized) {
+                        setEndTime(normalized);
+                      }
+                    }}
+                    placeholder="e.g. 10, 1030, 18:45"
+                    placeholderTextColor={placeholderColor}
+                    keyboardType="numeric"
+                    accessibilityLabel="End time"
+                  />
+                </View>
+              </View>
 
-                {inputError.length > 0 ? (
+              {/* Room number only */}
+              <ThemedText style={styles.formLabel}>Room number</ThemedText>
+              <TextInput
+                style={[
+                  styles.textInput,
+                  {
+                    backgroundColor: inputBackground,
+                    borderColor: cardBorder,
+                    color: inputTextColor,
+                  },
+                ]}
+                value={roomNumber}
+                onChangeText={(text) => {
+                  setRoomNumber(text.replace(/[^0-9]/g, ''));
+                  if (inputError) {
+                    setInputError('');
+                  }
+                }}
+                placeholder="e.g. 105"
+                placeholderTextColor={placeholderColor}
+                keyboardType="numeric"
+                accessibilityLabel="Room number"
+              />
+
+              {inputError.length > 0 ? (
                 <ThemedText style={styles.errorText} lightColor="#B91C1C" darkColor="#FCA5A5">
                   {inputError}
                 </ThemedText>
@@ -439,6 +575,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+  },
+  buildingRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 4,
   },
   dayChip: {
     paddingVertical: 8,
