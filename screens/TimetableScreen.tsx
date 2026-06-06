@@ -146,7 +146,7 @@ function getCurrentWeekdayName(): string {
   return WEEKDAY_NAMES[new Date().getDay()];
 }
 
-/**
+/** 
  * Get the current time in minutes since midnight.
  * This is used to compare against class start/end minute ranges.
  */
@@ -269,6 +269,51 @@ function findCurrentClass(timetable: DaySchedule[], currentDay: string, currentM
       return currentMinutes >= range.start && currentMinutes < range.end;
     }) || null
   );
+}
+
+/**
+ * Find the next upcoming class (may be later today or on a future weekday).
+ * Algorithm:
+ * - Start from the current weekday (if it's not in WEEKDAYS we start from the first listed day).
+ * - For each day in order (today, tomorrow, ... wrapping around), collect classes with valid time ranges.
+ * - For today only, consider classes that start strictly after the current time.
+ * - Compute an absolute minute value = daysAhead * 24*60 + startMinutes and pick the smallest one.
+ * Returns the class and the weekday name, or null when no future class exists.
+ */
+function findNextClass(
+  timetable: DaySchedule[],
+  currentDay: string,
+  currentMinutes: number
+): { classItem: TimetableClass; day: string } | null {
+  const startIndex = WEEKDAYS.indexOf(currentDay);
+  const baseIndex = startIndex >= 0 ? startIndex : 0;
+  let best: { classItem: TimetableClass; day: string; absMinutes: number } | null = null;
+
+  for (let offset = 0; offset < WEEKDAYS.length; offset++) {
+    const dayIndex = (baseIndex + offset) % WEEKDAYS.length;
+    const dayName = WEEKDAYS[dayIndex];
+    const daySchedule = timetable.find((d) => d.day === dayName);
+    if (!daySchedule) continue;
+
+    for (const classItem of daySchedule.classes) {
+      const range = getClassMinutesRange(classItem);
+      if (!range) continue;
+
+      // For today (offset === 0) only accept classes that start after the current time.
+      if (offset === 0 && range.start <= currentMinutes) {
+        continue;
+      }
+
+      const abs = offset * 24 * 60 + range.start;
+      if (!best || abs < best.absMinutes) {
+        best = { classItem, day: dayName, absMinutes: abs };
+      }
+    }
+    // If we already found a candidate on an earlier day, we can continue to check
+    // other days since there may be an even earlier class (unlikely but safe).
+  }
+
+  return best ? { classItem: best.classItem, day: best.day } : null;
 }
 
 // -----------------------------------------------------------------------------
@@ -416,6 +461,8 @@ export default function TimetableScreen() {
   const currentDayName = getCurrentWeekdayName();
   const currentMinutes = getCurrentTimeInMinutes();
   const currentClass = findCurrentClass(timetable, currentDayName, currentMinutes);
+  // Find the next upcoming class (could be later today or on a future weekday).
+  const nextClassResult = findNextClass(timetable, currentDayName, currentMinutes);
 
   /** Runs when the user taps "Add class". */
   function handleAddClass() {
@@ -562,6 +609,31 @@ export default function TimetableScreen() {
                 </>
               ) : (
                 <ThemedText style={styles.emptyDay}>No current class</ThemedText>
+              )}
+            </View>
+            
+            {/* ----- NEXT CLASS CARD ----- */}
+            <View style={[styles.currentClassCard, { backgroundColor: cardBackground, borderColor: cardBorder }]}> 
+              <ThemedText type="subtitle" style={styles.currentClassTitle}>
+                Next Class
+              </ThemedText>
+              {nextClassResult ? (
+                <>
+                  <ThemedText style={styles.className}>{nextClassResult.classItem.name}</ThemedText>
+                  <ThemedText style={styles.classMeta}>
+                    {nextClassResult.classItem.startTime && nextClassResult.classItem.endTime
+                      ? `${nextClassResult.classItem.startTime} – ${nextClassResult.classItem.endTime}`
+                      : nextClassResult.classItem.time || DEFAULT_ADDED_TIME}
+                  </ThemedText>
+                  <ThemedText style={styles.classMeta}>
+                    {nextClassResult.classItem.building
+                      ? `${nextClassResult.classItem.building}${nextClassResult.classItem.roomNumber ? ` ${nextClassResult.classItem.roomNumber}` : ''}`
+                      : nextClassResult.classItem.room || DEFAULT_ADDED_ROOM}
+                  </ThemedText>
+                  <ThemedText style={styles.classMeta}>{nextClassResult.day}</ThemedText>
+                </>
+              ) : (
+                <ThemedText style={styles.emptyDay}>No upcoming classes</ThemedText>
               )}
             </View>
 
