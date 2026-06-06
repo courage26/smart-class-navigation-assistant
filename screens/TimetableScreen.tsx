@@ -137,6 +137,140 @@ function normalizeTimeInput(value: string): string | null {
   return null;
 }
 
+/**
+ * Get the current weekday name from the system clock.
+ * This uses the browser/device local date.
+ */
+function getCurrentWeekdayName(): string {
+  const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  return WEEKDAY_NAMES[new Date().getDay()];
+}
+
+/**
+ * Get the current time in minutes since midnight.
+ * This is used to compare against class start/end minute ranges.
+ */
+function getCurrentTimeInMinutes(): number {
+  const now = new Date();
+  return now.getHours() * 60 + now.getMinutes();
+}
+
+/**
+ * Convert a HH:MM 24-hour time string into minutes since midnight.
+ * This makes time comparison easy and reliable.
+ */
+function timeStringToMinutes(time: string): number | null {
+  const match = /^([0-2]?\d):(\d{2})$/.exec(time.trim());
+  if (!match) {
+    return null;
+  }
+
+  const hour = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hour < 0 || hour > 23 || minutes < 0 || minutes > 59) {
+    return null;
+  }
+
+  return hour * 60 + minutes;
+}
+
+/**
+ * Parse a legacy AM/PM time like "9:00 AM" and convert it to 24-hour HH:MM.
+ */
+function parseAmPmTime(value: string): string | null {
+  const match = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(value.trim());
+  if (!match) {
+    return null;
+  }
+
+  let hour = Number(match[1]);
+  const minutes = Number(match[2]);
+  const period = match[3].toUpperCase();
+
+  if (hour < 1 || hour > 12 || minutes < 0 || minutes > 59) {
+    return null;
+  }
+
+  if (period === 'AM') {
+    if (hour === 12) {
+      hour = 0;
+    }
+  } else {
+    if (hour !== 12) {
+      hour += 12;
+    }
+  }
+
+  return `${hour.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+}
+
+/**
+ * Parse a legacy class time range string like "9:00 AM – 10:30 AM".
+ * Returns normalized 24-hour start/end times.
+ */
+function parseLegacyTimeRange(timeRange: string): { start: string; end: string } | null {
+  const match = /^(\d{1,2}:\d{2}\s*(?:AM|PM))\s*–\s*(\d{1,2}:\d{2}\s*(?:AM|PM))$/i.exec(timeRange.trim());
+  if (!match) {
+    return null;
+  }
+
+  const start = parseAmPmTime(match[1]);
+  const end = parseAmPmTime(match[2]);
+
+  if (!start || !end) {
+    return null;
+  }
+
+  return { start, end };
+}
+
+/**
+ * Get the minute range for a class, using new or legacy time fields.
+ */
+function getClassMinutesRange(classItem: TimetableClass): { start: number; end: number } | null {
+  if (classItem.startTime && classItem.endTime) {
+    const start = timeStringToMinutes(classItem.startTime);
+    const end = timeStringToMinutes(classItem.endTime);
+    if (start !== null && end !== null) {
+      return { start, end };
+    }
+  }
+
+  if (classItem.time) {
+    const parsed = parseLegacyTimeRange(classItem.time);
+    if (parsed) {
+      const start = timeStringToMinutes(parsed.start);
+      const end = timeStringToMinutes(parsed.end);
+      if (start !== null && end !== null) {
+        return { start, end };
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Find the current active class for today's timetable.
+ * It checks today's schedule and compares current minutes to each class range.
+ */
+function findCurrentClass(timetable: DaySchedule[], currentDay: string, currentMinutes: number): TimetableClass | null {
+  const todaySchedule = timetable.find((dayEntry) => dayEntry.day === currentDay);
+  if (!todaySchedule) {
+    return null;
+  }
+
+  return (
+    todaySchedule.classes.find((classItem) => {
+      const range = getClassMinutesRange(classItem);
+      if (!range) {
+        return false;
+      }
+      return currentMinutes >= range.start && currentMinutes < range.end;
+    }) || null
+  );
+}
+
 // -----------------------------------------------------------------------------
 // ONE CLASS ROW
 // -----------------------------------------------------------------------------
@@ -277,6 +411,12 @@ export default function TimetableScreen() {
   const inputTextColor = useThemeColor({}, 'text');
   const placeholderColor = useThemeColor({ light: '#94A3B8', dark: '#64748B' }, 'icon');
 
+  // Determine the current day and current minutes from the system clock.
+  // We then look up today's classes in the existing timetable state.
+  const currentDayName = getCurrentWeekdayName();
+  const currentMinutes = getCurrentTimeInMinutes();
+  const currentClass = findCurrentClass(timetable, currentDayName, currentMinutes);
+
   /** Runs when the user taps "Add class". */
   function handleAddClass() {
     const trimmedName = subjectName.trim();
@@ -400,6 +540,30 @@ export default function TimetableScreen() {
             <ThemedText style={styles.subtitle}>
               Sample classes below — add your own with the form
             </ThemedText>
+
+            {/* ----- CURRENT CLASS CARD ----- */}
+            <View style={[styles.currentClassCard, { backgroundColor: cardBackground, borderColor: cardBorder }]}> 
+              <ThemedText type="subtitle" style={styles.currentClassTitle}>
+                Current Class
+              </ThemedText>
+              {currentClass ? (
+                <>
+                  <ThemedText style={styles.className}>{currentClass.name}</ThemedText>
+                  <ThemedText style={styles.classMeta}>
+                    {currentClass.startTime && currentClass.endTime
+                      ? `${currentClass.startTime} – ${currentClass.endTime}`
+                      : currentClass.time || DEFAULT_ADDED_TIME}
+                  </ThemedText>
+                  <ThemedText style={styles.classMeta}>
+                    {currentClass.building
+                      ? `${currentClass.building}${currentClass.roomNumber ? ` ${currentClass.roomNumber}` : ''}`
+                      : currentClass.room || DEFAULT_ADDED_ROOM}
+                  </ThemedText>
+                </>
+              ) : (
+                <ThemedText style={styles.emptyDay}>No current class</ThemedText>
+              )}
+            </View>
 
             {/* ----- ADD CLASS FORM ----- */}
             <View
@@ -671,6 +835,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     padding: 16,
     gap: 8,
+  },
+  currentClassCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 16,
+    gap: 8,
+  },
+  currentClassTitle: {
+    fontSize: 18,
+    marginBottom: 4,
   },
   formTitle: {
     fontSize: 18,
