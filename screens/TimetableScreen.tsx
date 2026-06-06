@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import {
+  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -144,10 +145,14 @@ function ClassRow({
   classItem,
   isLast,
   dividerColor,
+  isSelected,
+  onToggle,
 }: {
   classItem: TimetableClass;
   isLast: boolean;
   dividerColor: string;
+  isSelected: boolean;
+  onToggle: (classId: string) => void;
 }) {
   const timeLabel = classItem.startTime && classItem.endTime
     ? `${classItem.startTime} – ${classItem.endTime}`
@@ -158,14 +163,37 @@ function ClassRow({
     : classItem.room || DEFAULT_ADDED_ROOM;
 
   return (
-    <View
-      style={[styles.classRow, !isLast && { borderBottomWidth: 1, borderBottomColor: dividerColor }]}> 
-      <ThemedText type="defaultSemiBold" style={styles.className}>
-        {classItem.name}
-      </ThemedText>
-      <ThemedText style={styles.classMeta}>{timeLabel}</ThemedText>
-      <ThemedText style={styles.classMeta}>{locationLabel}</ThemedText>
-    </View>
+    <Pressable
+      onPress={() => onToggle(classItem.id)}
+      style={[
+        styles.classRow,
+        !isLast && { borderBottomWidth: 1, borderBottomColor: dividerColor },
+        isSelected && styles.classRowSelected,
+      ]}
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked: isSelected }}
+      accessibilityLabel={`${classItem.name} - toggle selection`}>
+      <View style={styles.classRowContent}>
+        {/* Checkbox indicator */}
+        <View
+          style={[
+            styles.checkbox,
+            isSelected && styles.checkboxSelected,
+            { borderColor: dividerColor },
+          ]}>
+          {isSelected && <ThemedText style={styles.checkmark}>✓</ThemedText>}
+        </View>
+
+        {/* Class info */}
+        <View style={styles.classInfo}>
+          <ThemedText type="defaultSemiBold" style={styles.className}>
+            {classItem.name}
+          </ThemedText>
+          <ThemedText style={styles.classMeta}>{timeLabel}</ThemedText>
+          <ThemedText style={styles.classMeta}>{locationLabel}</ThemedText>
+        </View>
+      </View>
+    </Pressable>
   );
 }
 
@@ -178,11 +206,15 @@ function DayCard({
   cardBackground,
   cardBorder,
   dividerColor,
+  selectedClassIds,
+  onToggleSelection,
 }: {
   schedule: DaySchedule;
   cardBackground: string;
   cardBorder: string;
   dividerColor: string;
+  selectedClassIds: Set<string>;
+  onToggleSelection: (classId: string) => void;
 }) {
   const hasClasses = schedule.classes.length > 0;
 
@@ -201,6 +233,8 @@ function DayCard({
             classItem={classItem}
             isLast={index === schedule.classes.length - 1}
             dividerColor={dividerColor}
+            isSelected={selectedClassIds.has(classItem.id)}
+            onToggle={onToggleSelection}
           />
         ))
       ) : (
@@ -231,6 +265,9 @@ export default function TimetableScreen() {
   const [roomNumber, setRoomNumber] = useState('');
   // inputError: short message when the user taps Add with missing/invalid values.
   const [inputError, setInputError] = useState('');
+  // selectedClassIds: tracks which classes the user has selected for deletion.
+  // Using Set<string> for fast lookups and avoiding duplicate IDs.
+  const [selectedClassIds, setSelectedClassIds] = useState<Set<string>>(new Set());
 
   const cardBackground = useThemeColor({ light: '#F1F5F9', dark: '#252B32' }, 'background');
   const cardBorder = useThemeColor({ light: '#E2E8F0', dark: '#334155' }, 'icon');
@@ -289,6 +326,62 @@ export default function TimetableScreen() {
     setStartTime('');
     setEndTime('');
     setRoomNumber('');
+  }
+
+  /**
+   * Toggle the selection state of a class.
+   * If the class is already selected, remove it; otherwise, add it.
+   */
+  function handleToggleSelection(classId: string) {
+    setSelectedClassIds((previousSelected) => {
+      const newSelected = new Set(previousSelected);
+      if (newSelected.has(classId)) {
+        newSelected.delete(classId);
+      } else {
+        newSelected.add(classId);
+      }
+      return newSelected;
+    });
+  }
+
+  /**
+   * Show a confirmation dialog and delete selected classes if confirmed.
+   * Uses immutable state updates to ensure React detects the change.
+   */
+  function handleDeleteSelected() {
+    const count = selectedClassIds.size;
+    if (count === 0) {
+      return;
+    }
+
+    Alert.alert(
+      'Confirm Delete',
+      'Are you sure you want to delete the selected classes?',
+      [
+        {
+          text: 'Cancel',
+          onPress: () => {
+            // User cancelled; do nothing.
+          },
+          style: 'cancel',
+        },
+        {
+          text: 'Delete',
+          onPress: () => {
+            // Delete confirmed: remove all selected classes from timetable.
+            setTimetable((previousTimetable) =>
+              previousTimetable.map((dayEntry) => ({
+                ...dayEntry,
+                classes: dayEntry.classes.filter((cls) => !selectedClassIds.has(cls.id)),
+              }))
+            );
+            // Clear the selection after deletion.
+            setSelectedClassIds(new Set());
+          },
+          style: 'destructive',
+        },
+      ]
+    );
   }
 
   return (
@@ -509,6 +602,22 @@ export default function TimetableScreen() {
               </Pressable>
             </View>
 
+            {/* Show Delete Selected button only when classes are selected */}
+            {selectedClassIds.size > 0 && (
+              <Pressable
+                onPress={handleDeleteSelected}
+                style={({ pressed }) => [
+                  styles.deleteButton,
+                  { backgroundColor: '#DC2626', opacity: pressed ? 0.85 : 1 },
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel={`Delete ${selectedClassIds.size} selected class${selectedClassIds.size !== 1 ? 'es' : ''}`}>
+                <ThemedText style={styles.deleteButtonText} lightColor="#FFFFFF" darkColor="#FFFFFF">
+                  Delete Selected ({selectedClassIds.size})
+                </ThemedText>
+              </Pressable>
+            )}
+
             {/* ----- DAY CARDS (read from `timetable` state) ----- */}
             {timetable.map((schedule) => (
               <DayCard
@@ -517,6 +626,8 @@ export default function TimetableScreen() {
                 cardBackground={cardBackground}
                 cardBorder={cardBorder}
                 dividerColor={dividerColor}
+                selectedClassIds={selectedClassIds}
+                onToggleSelection={handleToggleSelection}
               />
             ))}
           </ScrollView>
@@ -636,6 +747,44 @@ const styles = StyleSheet.create({
   },
   classRow: {
     paddingVertical: 10,
+    paddingHorizontal: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  // Highlight the row when a class is selected
+  classRowSelected: {
+    opacity: 0.8,
+  },
+  // Container for checkbox and class info
+  classRowContent: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    flex: 1,
+    gap: 10,
+  },
+  // Checkbox styling: a small box that shows selection state
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderWidth: 2,
+    borderRadius: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  // Selected checkbox appearance
+  checkboxSelected: {
+    backgroundColor: '#0a7ea4',
+    borderColor: '#0a7ea4',
+  },
+  // Checkmark inside selected checkbox
+  checkmark: {
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  // Class info section (name, time, location)
+  classInfo: {
+    flex: 1,
     gap: 2,
   },
   className: {
@@ -649,5 +798,17 @@ const styles = StyleSheet.create({
     fontSize: 15,
     opacity: 0.7,
     fontStyle: 'italic',
+  },
+  // Delete Selected button styling
+  deleteButton: {
+    marginTop: 8,
+    marginHorizontal: 0,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  deleteButtonText: {
+    fontSize: 16,
+    fontWeight: '700',
   },
 });
