@@ -272,7 +272,7 @@ function findCurrentClass(timetable: DaySchedule[], currentDay: string, currentM
 }
 
 /**
- * Find the next upcoming class (may be later today or on a future weekday).
+ * Find the next upcoming class (may be later today or on a weekday).
  * Algorithm:
  * - Start from the current weekday (if it's not in WEEKDAYS we start from the first listed day).
  * - For each day in order (today, tomorrow, ... wrapping around), collect classes with valid time ranges.
@@ -286,7 +286,8 @@ function findNextClass(
   currentMinutes: number
 ): { classItem: TimetableClass; day: string } | null {
   const startIndex = WEEKDAYS.indexOf(currentDay);
-  const baseIndex = startIndex >= 0 ? startIndex : 0;
+  const isCurrentDayInTimetable = startIndex >= 0;
+  const baseIndex = isCurrentDayInTimetable ? startIndex : 0;
   let best: { classItem: TimetableClass; day: string; absMinutes: number } | null = null;
 
   for (let offset = 0; offset < WEEKDAYS.length; offset++) {
@@ -300,7 +301,7 @@ function findNextClass(
       if (!range) continue;
 
       // For today (offset === 0) only accept classes that start after the current time.
-      if (offset === 0 && range.start <= currentMinutes) {
+      if (isCurrentDayInTimetable && offset === 0 && range.start <= currentMinutes) {
         continue;
       }
 
