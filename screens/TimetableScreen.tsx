@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
@@ -14,36 +14,29 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { useThemeColor } from '@/hooks/use-theme-color';
+import {
+  DaySchedule,
+  TimetableClass,
+  WEEKDAYS,
+  findCurrentClass,
+  findNextClass,
+  formatMinutesToTime,
+  getCurrentTimeInMinutes,
+  getCurrentWeekdayName,
+  getDepartureStatus,
+  getTimetableSnapshot,
+  setTimetableSnapshot,
+  subscribeToTimetable,
+} from '@/utils/timetable-utils';
 
 // -----------------------------------------------------------------------------
 // TYPES & STARTING DATA (edit defaults here — still no database)
 // -----------------------------------------------------------------------------
 // `id` helps React tell rows apart when you add many classes with the same name.
 
-type TimetableClass = {
-  id: string;
-  name: string;
-  // store separate start/end times for new classes
-  startTime?: string;
-  endTime?: string;
-  // store building and room number separately for new classes
-  building?: string;
-  roomNumber?: string;
-  // legacy support for sample data already present in the app
-  time?: string;
-  room?: string;
-};
-
-type DaySchedule = {
-  day: string;
-  classes: TimetableClass[];
-}
-
 /** Placeholder text for classes you add with the button (change anytime below). */
 const DEFAULT_ADDED_TIME = 'Time not set';
 const DEFAULT_ADDED_ROOM = 'TBD';
-const WALKING_TIME_MINUTES = 10;
-const BUFFER_TIME_MINUTES = 5;
 
 const BUILDINGS = [
   'Changhak Hall',
@@ -55,46 +48,6 @@ const BUILDINGS = [
   '100th Anniversary Hall',
   'Dareuk Hall',
 ];
-
-/** Starting week — copied into state once when the screen loads. */
-const INITIAL_WEEKLY_TIMETABLE: DaySchedule[] = [
-  {
-    day: 'Monday',
-    classes: [
-      { id: 'mon-1', name: 'Introduction to Computer Science', time: '9:00 AM – 10:30 AM', room: 'Room 204' },
-      { id: 'mon-2', name: 'Calculus I', time: '11:00 AM – 12:15 PM', room: 'Room 118' },
-    ],
-  },
-  {
-    day: 'Tuesday',
-    classes: [
-      { id: 'tue-1', name: 'English Composition', time: '10:00 AM – 11:15 AM', room: 'Room 302' },
-      { id: 'tue-2', name: 'Physics Lab', time: '1:00 PM – 3:00 PM', room: 'Lab 5' },
-    ],
-  },
-  {
-    day: 'Wednesday',
-    classes: [
-      { id: 'wed-1', name: 'Introduction to C programming', time: '9:00 AM – 10:30 AM', room: 'Room 204' },
-      { id: 'wed-2', name: 'World History', time: '2:00 PM – 3:15 PM', room: 'Room 210' },
-    ],
-  },
-  {
-    day: 'Thursday',
-    classes: [
-      { id: 'thu-1', name: 'Calculus I', time: '11:00 AM – 12:15 PM', room: 'Room 118' },
-      { id: 'thu-2', name: 'Study Group (optional)', time: '4:00 PM – 5:00 PM', room: 'Library' },
-    ],
-  },
-  {
-    day: 'Friday',
-    classes: [
-      { id: 'fri-1', name: 'English Composition', time: '10:00 AM – 11:15 AM', room: 'Room 302' },
-    ],
-  },
-];
-
-const WEEKDAYS = INITIAL_WEEKLY_TIMETABLE.map((entry) => entry.day);
 
 /**
  * Normalize a time input string into 24-hour HH:MM format.
@@ -139,231 +92,6 @@ function normalizeTimeInput(value: string): string | null {
   return null;
 }
 
-/**
- * Get the current weekday name from the system clock.
- * This uses the browser/device local date.
- */
-function getCurrentWeekdayName(): string {
-  const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  return WEEKDAY_NAMES[new Date().getDay()];
-}
-
-/** 
- * Get the current time in minutes since midnight.
- * This is used to compare against class start/end minute ranges.
- */
-function getCurrentTimeInMinutes(): number {
-  const now = new Date();
-  return now.getHours() * 60 + now.getMinutes();
-}
-
-/**
- * Convert a HH:MM 24-hour time string into minutes since midnight.
- * This makes time comparison easy and reliable.
- */
-function timeStringToMinutes(time: string): number | null {
-  const match = /^([0-2]?\d):(\d{2})$/.exec(time.trim());
-  if (!match) {
-    return null;
-  }
-
-  const hour = Number(match[1]);
-  const minutes = Number(match[2]);
-  if (hour < 0 || hour > 23 || minutes < 0 || minutes > 59) {
-    return null;
-  }
-
-  return hour * 60 + minutes;
-}
-
-/**
- * Parse a legacy AM/PM time like "9:00 AM" and convert it to 24-hour HH:MM.
- */
-function parseAmPmTime(value: string): string | null {
-  const match = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(value.trim());
-  if (!match) {
-    return null;
-  }
-
-  let hour = Number(match[1]);
-  const minutes = Number(match[2]);
-  const period = match[3].toUpperCase();
-
-  if (hour < 1 || hour > 12 || minutes < 0 || minutes > 59) {
-    return null;
-  }
-
-  if (period === 'AM') {
-    if (hour === 12) {
-      hour = 0;
-    }
-  } else {
-    if (hour !== 12) {
-      hour += 12;
-    }
-  }
-
-  return `${hour.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
-}
-
-/**
- * Parse a legacy class time range string like "9:00 AM – 10:30 AM".
- * Returns normalized 24-hour start/end times.
- */
-function parseLegacyTimeRange(timeRange: string): { start: string; end: string } | null {
-  const match = /^(\d{1,2}:\d{2}\s*(?:AM|PM))\s*–\s*(\d{1,2}:\d{2}\s*(?:AM|PM))$/i.exec(timeRange.trim());
-  if (!match) {
-    return null;
-  }
-
-  const start = parseAmPmTime(match[1]);
-  const end = parseAmPmTime(match[2]);
-
-  if (!start || !end) {
-    return null;
-  }
-
-  return { start, end };
-}
-
-/**
- * Get the minute range for a class, using new or legacy time fields.
- */
-function getClassMinutesRange(classItem: TimetableClass): { start: number; end: number } | null {
-  if (classItem.startTime && classItem.endTime) {
-    const start = timeStringToMinutes(classItem.startTime);
-    const end = timeStringToMinutes(classItem.endTime);
-    if (start !== null && end !== null) {
-      return { start, end };
-    }
-  }
-
-  if (classItem.time) {
-    const parsed = parseLegacyTimeRange(classItem.time);
-    if (parsed) {
-      const start = timeStringToMinutes(parsed.start);
-      const end = timeStringToMinutes(parsed.end);
-      if (start !== null && end !== null) {
-        return { start, end };
-      }
-    }
-  }
-
-  return null;
-}
-
-/**
- * Convert minutes since midnight into a friendly 12-hour time label.
- */
-function formatMinutesToTime(minutes: number): string {
-  const hour = Math.floor(minutes / 60);
-  const minute = minutes % 60;
-  const period = hour >= 12 ? 'PM' : 'AM';
-  const displayHour = hour % 12 === 0 ? 12 : hour % 12;
-
-  return `${displayHour}:${minute.toString().padStart(2, '0')} ${period}`;
-}
-
-/**
- * Build the departure status text for the next class.
- * This uses the same class start time as the next-class card, then subtracts
- * walking and buffer time to decide when to leave.
- */
-function getDepartureStatus(nextClassResult: { classItem: TimetableClass; day: string } | null, currentMinutes: number): {
-  leaveTimeMinutes: number | null;
-  statusMessage: string;
-} {
-  if (!nextClassResult) {
-    return { leaveTimeMinutes: null, statusMessage: 'No upcoming classes' };
-  }
-
-  const range = getClassMinutesRange(nextClassResult.classItem);
-  if (!range) {
-    return { leaveTimeMinutes: null, statusMessage: 'No departure time available' };
-  }
-
-  // Leave time = class start time - walking time - buffer time.
-  const leaveTimeMinutes = range.start - WALKING_TIME_MINUTES - BUFFER_TIME_MINUTES;
-  const minutesUntilLeave = leaveTimeMinutes - currentMinutes;
-
-  // Minute calculations are kept simple so the status text is easy to understand.
-  if (minutesUntilLeave > 1) {
-    return { leaveTimeMinutes, statusMessage: `Leave in ${minutesUntilLeave} minutes` };
-  }
-
-  if (minutesUntilLeave >= 0) {
-    return { leaveTimeMinutes, statusMessage: 'Leave now' };
-  }
-
-  return { leaveTimeMinutes, statusMessage: 'Running late' };
-}
-
-/**
- * Find the current active class for today's timetable.
- * It checks today's schedule and compares current minutes to each class range.
- */
-function findCurrentClass(timetable: DaySchedule[], currentDay: string, currentMinutes: number): TimetableClass | null {
-  const todaySchedule = timetable.find((dayEntry) => dayEntry.day === currentDay);
-  if (!todaySchedule) {
-    return null;
-  }
-
-  return (
-    todaySchedule.classes.find((classItem) => {
-      const range = getClassMinutesRange(classItem);
-      if (!range) {
-        return false;
-      }
-      return currentMinutes >= range.start && currentMinutes < range.end;
-    }) || null
-  );
-}
-
-/**
- * Find the next upcoming class (may be later today or on a weekday).
- * Algorithm:
- * - Start from the current weekday (if it's not in WEEKDAYS we start from the first listed day).
- * - For each day in order (today, tomorrow, ... wrapping around), collect classes with valid time ranges.
- * - For today only, consider classes that start strictly after the current time.
- * - Compute an absolute minute value = daysAhead * 24*60 + startMinutes and pick the smallest one.
- * Returns the class and the weekday name, or null when no future class exists.
- */
-function findNextClass(
-  timetable: DaySchedule[],
-  currentDay: string,
-  currentMinutes: number
-): { classItem: TimetableClass; day: string } | null {
-  const startIndex = WEEKDAYS.indexOf(currentDay);
-  const isCurrentDayInTimetable = startIndex >= 0;
-  const baseIndex = isCurrentDayInTimetable ? startIndex : 0;
-  let best: { classItem: TimetableClass; day: string; absMinutes: number } | null = null;
-
-  for (let offset = 0; offset < WEEKDAYS.length; offset++) {
-    const dayIndex = (baseIndex + offset) % WEEKDAYS.length;
-    const dayName = WEEKDAYS[dayIndex];
-    const daySchedule = timetable.find((d) => d.day === dayName);
-    if (!daySchedule) continue;
-
-    for (const classItem of daySchedule.classes) {
-      const range = getClassMinutesRange(classItem);
-      if (!range) continue;
-
-      // For today (offset === 0) only accept classes that start after the current time.
-      if (isCurrentDayInTimetable && offset === 0 && range.start <= currentMinutes) {
-        continue;
-      }
-
-      const abs = offset * 24 * 60 + range.start;
-      if (!best || abs < best.absMinutes) {
-        best = { classItem, day: dayName, absMinutes: abs };
-      }
-    }
-    // If we already found a candidate on an earlier day, we can continue to check
-    // other days since there may be an even earlier class (unlikely but safe).
-  }
-
-  return best ? { classItem: best.classItem, day: best.day } : null;
-}
 
 // -----------------------------------------------------------------------------
 // ONE CLASS ROW
@@ -478,8 +206,8 @@ function DayCard({
 
 export default function TimetableScreen() {
   // --- React state (lives only while the app is open — no database) ---
-  // timetable: the full Mon–Fri list; updating it re-renders the cards below.
-  const [timetable, setTimetable] = useState<DaySchedule[]>(INITIAL_WEEKLY_TIMETABLE);
+  // timetable: the shared Mon–Fri list that both screens read from.
+  const timetable = useSyncExternalStore(subscribeToTimetable, getTimetableSnapshot);
   // selectedDay: which weekday receives the next class you add.
   const [selectedDay, setSelectedDay] = useState<string>('Monday');
   // subjectName: text from the input box (controlled input).
@@ -549,14 +277,13 @@ export default function TimetableScreen() {
       roomNumber: roomNumber.trim().length > 0 ? roomNumber.trim() : undefined,
     };
 
-    // Immutable update: build a new array so React detects the change and re-renders.
-    setTimetable((previousTimetable) =>
-      previousTimetable.map((dayEntry) =>
-        dayEntry.day === selectedDay
-          ? { ...dayEntry, classes: [...dayEntry.classes, newClass] }
-          : dayEntry
-      )
+    // Immutable update: build a new array and write it to the shared store.
+    const nextTimetable = timetable.map((dayEntry) =>
+      dayEntry.day === selectedDay
+        ? { ...dayEntry, classes: [...dayEntry.classes, newClass] }
+        : dayEntry
     );
+    setTimetableSnapshot(nextTimetable);
 
     // Clear inputs so the form is ready for the next addition.
     setSubjectName('');
@@ -606,12 +333,11 @@ export default function TimetableScreen() {
           text: 'Delete',
           onPress: () => {
             // Delete confirmed: remove all selected classes from timetable.
-            setTimetable((previousTimetable) =>
-              previousTimetable.map((dayEntry) => ({
-                ...dayEntry,
-                classes: dayEntry.classes.filter((cls) => !selectedClassIds.has(cls.id)),
-              }))
-            );
+            const nextTimetable = timetable.map((dayEntry) => ({
+              ...dayEntry,
+              classes: dayEntry.classes.filter((cls) => !selectedClassIds.has(cls.id)),
+            }));
+            setTimetableSnapshot(nextTimetable);
             // Clear the selection after deletion.
             setSelectedClassIds(new Set());
           },

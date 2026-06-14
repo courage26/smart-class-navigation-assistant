@@ -1,26 +1,21 @@
 import { Ionicons } from '@expo/vector-icons';
+import { useSyncExternalStore } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { useThemeColor } from '@/hooks/use-theme-color';
-
-/**
- * Demo-only data — replace with your schedule logic later.
- * Kept inline so this screen stays self-contained and needs no network.
- */
-const DEMO_CURRENT_CLASS = {
-  courseName: 'Introduction to Computer Science',
-  room: 'Building A · Room 204',
-  timeLabel: '10:00 AM – 11:15 AM',
-} as const;
-
-const DEMO_DEPARTURE_ALERT = {
-  headline: 'Time to head out',
-  body: 'Leave now to arrive about 5 minutes before class starts.',
-  minutesUntilSuggestedLeave: 8,
-} as const;
+import {
+  findCurrentClass,
+  findNextClass,
+  formatMinutesToTime,
+  getCurrentTimeInMinutes,
+  getCurrentWeekdayName,
+  getDepartureStatus,
+  getTimetableSnapshot,
+  subscribeToTimetable,
+} from '@/utils/timetable-utils';
 
 export default function HomeScreen() {
   const cardBackground = useThemeColor({ light: '#F1F5F9', dark: '#252B32' }, 'background');
@@ -30,6 +25,13 @@ export default function HomeScreen() {
     { light: 'rgba(10, 126, 164, 0.12)', dark: 'rgba(91, 192, 222, 0.16)' },
     'background'
   );
+
+  const timetable = useSyncExternalStore(subscribeToTimetable, getTimetableSnapshot);
+  const currentDayName = getCurrentWeekdayName();
+  const currentMinutes = getCurrentTimeInMinutes();
+  const currentClass = findCurrentClass(timetable, currentDayName, currentMinutes);
+  const nextClassResult = findNextClass(timetable, currentDayName, currentMinutes);
+  const departureStatus = getDepartureStatus(nextClassResult, currentMinutes);
 
   return (
     <ThemedView style={styles.screen}>
@@ -50,7 +52,9 @@ export default function HomeScreen() {
           <View
             style={[styles.card, { backgroundColor: cardBackground, borderColor: cardBorder }]}
             accessibilityRole="none"
-            accessibilityLabel={`Current class. ${DEMO_CURRENT_CLASS.courseName}. ${DEMO_CURRENT_CLASS.room}. ${DEMO_CURRENT_CLASS.timeLabel}.`}>
+            accessibilityLabel={currentClass
+              ? `Current class. ${currentClass.name}. ${currentClass.building ? `${currentClass.building}${currentClass.roomNumber ? ` ${currentClass.roomNumber}` : ''}` : currentClass.room || 'TBD'}. ${currentClass.startTime && currentClass.endTime ? `${currentClass.startTime} – ${currentClass.endTime}` : currentClass.time || 'Time not set'}.`
+              : 'Current class. No current class.'}>
             <View style={styles.cardHeader}>
               <View style={[styles.iconBadge, { backgroundColor: classBadgeWash }]}>
                 <Ionicons name="book-outline" size={22} color={accent} accessibilityElementsHidden />
@@ -59,33 +63,78 @@ export default function HomeScreen() {
                 Current class
               </ThemedText>
             </View>
-            <ThemedText type="defaultSemiBold" style={styles.courseName}>
-              {DEMO_CURRENT_CLASS.courseName}
-            </ThemedText>
-            <ThemedText style={styles.meta}>{DEMO_CURRENT_CLASS.room}</ThemedText>
-            <ThemedText style={styles.meta}>{DEMO_CURRENT_CLASS.timeLabel}</ThemedText>
+            {currentClass ? (
+              <>
+                <ThemedText type="defaultSemiBold" style={styles.courseName}>{currentClass.name}</ThemedText>
+                <ThemedText style={styles.meta}>
+                  {currentClass.building
+                    ? `${currentClass.building}${currentClass.roomNumber ? ` ${currentClass.roomNumber}` : ''}`
+                    : currentClass.room || 'TBD'}
+                </ThemedText>
+                <ThemedText style={styles.meta}>
+                  {currentClass.startTime && currentClass.endTime
+                    ? `${currentClass.startTime} – ${currentClass.endTime}`
+                    : currentClass.time || 'Time not set'}
+                </ThemedText>
+              </>
+            ) : (
+              <ThemedText style={styles.meta}>No current class</ThemedText>
+            )}
           </View>
 
           <View
             style={[styles.card, styles.alertCard, { backgroundColor: cardBackground, borderColor: cardBorder }]}
             accessibilityRole="none"
-            accessibilityLabel={`Departure alert. ${DEMO_DEPARTURE_ALERT.headline}. ${DEMO_DEPARTURE_ALERT.body} Suggested leave in about ${DEMO_DEPARTURE_ALERT.minutesUntilSuggestedLeave} minutes.`}>
+            accessibilityLabel={nextClassResult
+              ? `Next class. ${nextClassResult.classItem.name}. ${nextClassResult.day}. ${nextClassResult.classItem.startTime && nextClassResult.classItem.endTime ? `${nextClassResult.classItem.startTime} – ${nextClassResult.classItem.endTime}` : nextClassResult.classItem.time || 'Time not set'}.`
+              : 'Next class. No upcoming classes.'}>
             <View style={styles.cardHeader}>
               <View style={[styles.iconBadge, { backgroundColor: '#F59E0B22' }]}>
                 <Ionicons name="notifications-outline" size={22} color="#F59E0B" accessibilityElementsHidden />
               </View>
               <ThemedText type="subtitle" style={styles.cardTitle}>
-                Departure alert
+                Next class
               </ThemedText>
             </View>
-            <ThemedText type="defaultSemiBold" style={styles.alertHeadline}>
-              {DEMO_DEPARTURE_ALERT.headline}
-            </ThemedText>
-            <ThemedText style={styles.meta}>{DEMO_DEPARTURE_ALERT.body}</ThemedText>
-            <View style={[styles.pill, { borderColor: accent }]}>
-              <ThemedText type="defaultSemiBold" style={[styles.pillText, { color: accent }]}>
-                Suggested leave in ~{DEMO_DEPARTURE_ALERT.minutesUntilSuggestedLeave} min
+            {nextClassResult ? (
+              <>
+                <ThemedText type="defaultSemiBold" style={styles.courseName}>{nextClassResult.classItem.name}</ThemedText>
+                <ThemedText style={styles.meta}>{nextClassResult.day}</ThemedText>
+                <ThemedText style={styles.meta}>
+                  {nextClassResult.classItem.startTime && nextClassResult.classItem.endTime
+                    ? `${nextClassResult.classItem.startTime} – ${nextClassResult.classItem.endTime}`
+                    : nextClassResult.classItem.time || 'Time not set'}
+                </ThemedText>
+              </>
+            ) : (
+              <ThemedText style={styles.meta}>No upcoming classes</ThemedText>
+            )}
+          </View>
+
+          <View
+            style={[styles.card, styles.alertCard, { backgroundColor: cardBackground, borderColor: cardBorder }]}
+            accessibilityRole="none"
+            accessibilityLabel={`Departure status. ${departureStatus.statusMessage}${departureStatus.leaveTimeMinutes !== null ? ` Leave time ${formatMinutesToTime(departureStatus.leaveTimeMinutes)}.` : ''}`}>
+            <View style={styles.cardHeader}>
+              <View style={[styles.iconBadge, { backgroundColor: '#F59E0B22' }]}>
+                <Ionicons name="notifications-outline" size={22} color="#F59E0B" accessibilityElementsHidden />
+              </View>
+              <ThemedText type="subtitle" style={styles.cardTitle}>
+                Departure status
               </ThemedText>
+            </View>
+            {departureStatus.leaveTimeMinutes !== null ? (
+              <>
+                <ThemedText type="defaultSemiBold" style={styles.alertHeadline}>
+                  {departureStatus.statusMessage}
+                </ThemedText>
+                <ThemedText style={styles.meta}>Leave time: {formatMinutesToTime(departureStatus.leaveTimeMinutes)}</ThemedText>
+              </>
+            ) : (
+              <ThemedText style={styles.meta}>No departure status available</ThemedText>
+            )}
+            <View style={[styles.pill, { borderColor: accent }]}>
+              <ThemedText type="defaultSemiBold" style={[styles.pillText, { color: accent }]}>Real timetable status</ThemedText>
             </View>
           </View>
         </ScrollView>
