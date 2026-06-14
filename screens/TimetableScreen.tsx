@@ -42,6 +42,8 @@ type DaySchedule = {
 /** Placeholder text for classes you add with the button (change anytime below). */
 const DEFAULT_ADDED_TIME = 'Time not set';
 const DEFAULT_ADDED_ROOM = 'TBD';
+const WALKING_TIME_MINUTES = 10;
+const BUFFER_TIME_MINUTES = 5;
 
 const BUILDINGS = [
   'Changhak Hall',
@@ -248,6 +250,52 @@ function getClassMinutesRange(classItem: TimetableClass): { start: number; end: 
   }
 
   return null;
+}
+
+/**
+ * Convert minutes since midnight into a friendly 12-hour time label.
+ */
+function formatMinutesToTime(minutes: number): string {
+  const hour = Math.floor(minutes / 60);
+  const minute = minutes % 60;
+  const period = hour >= 12 ? 'PM' : 'AM';
+  const displayHour = hour % 12 === 0 ? 12 : hour % 12;
+
+  return `${displayHour}:${minute.toString().padStart(2, '0')} ${period}`;
+}
+
+/**
+ * Build the departure status text for the next class.
+ * This uses the same class start time as the next-class card, then subtracts
+ * walking and buffer time to decide when to leave.
+ */
+function getDepartureStatus(nextClassResult: { classItem: TimetableClass; day: string } | null, currentMinutes: number): {
+  leaveTimeMinutes: number | null;
+  statusMessage: string;
+} {
+  if (!nextClassResult) {
+    return { leaveTimeMinutes: null, statusMessage: 'No upcoming classes' };
+  }
+
+  const range = getClassMinutesRange(nextClassResult.classItem);
+  if (!range) {
+    return { leaveTimeMinutes: null, statusMessage: 'No departure time available' };
+  }
+
+  // Leave time = class start time - walking time - buffer time.
+  const leaveTimeMinutes = range.start - WALKING_TIME_MINUTES - BUFFER_TIME_MINUTES;
+  const minutesUntilLeave = leaveTimeMinutes - currentMinutes;
+
+  // Minute calculations are kept simple so the status text is easy to understand.
+  if (minutesUntilLeave > 1) {
+    return { leaveTimeMinutes, statusMessage: `Leave in ${minutesUntilLeave} minutes` };
+  }
+
+  if (minutesUntilLeave >= 0) {
+    return { leaveTimeMinutes, statusMessage: 'Leave now' };
+  }
+
+  return { leaveTimeMinutes, statusMessage: 'Running late' };
 }
 
 /**
@@ -464,6 +512,7 @@ export default function TimetableScreen() {
   const currentClass = findCurrentClass(timetable, currentDayName, currentMinutes);
   // Find the next upcoming class (could be later today or on a future weekday).
   const nextClassResult = findNextClass(timetable, currentDayName, currentMinutes);
+  const departureStatus = getDepartureStatus(nextClassResult, currentMinutes);
 
   /** Runs when the user taps "Add class". */
   function handleAddClass() {
@@ -622,19 +671,35 @@ export default function TimetableScreen() {
                 <>
                   <ThemedText style={styles.className}>{nextClassResult.classItem.name}</ThemedText>
                   <ThemedText style={styles.classMeta}>
-                    {nextClassResult.classItem.startTime && nextClassResult.classItem.endTime
-                      ? `${nextClassResult.classItem.startTime} – ${nextClassResult.classItem.endTime}`
+                    {nextClassResult.day} • {nextClassResult.classItem.startTime && nextClassResult.classItem.endTime
+                      ? `${nextClassResult.classItem.startTime} - ${nextClassResult.classItem.endTime}`
                       : nextClassResult.classItem.time || DEFAULT_ADDED_TIME}
                   </ThemedText>
                   <ThemedText style={styles.classMeta}>
                     {nextClassResult.classItem.building
-                      ? `${nextClassResult.classItem.building}${nextClassResult.classItem.roomNumber ? ` ${nextClassResult.classItem.roomNumber}` : ''}`
+                      ? `${nextClassResult.classItem.building} ${nextClassResult.classItem.roomNumber ?? ''}`.trim()
                       : nextClassResult.classItem.room || DEFAULT_ADDED_ROOM}
                   </ThemedText>
-                  <ThemedText style={styles.classMeta}>{nextClassResult.day}</ThemedText>
                 </>
               ) : (
                 <ThemedText style={styles.emptyDay}>No upcoming classes</ThemedText>
+              )}
+            </View>
+
+            {/* ----- DEPARTURE STATUS CARD ----- */}
+            <View style={[styles.currentClassCard, { backgroundColor: cardBackground, borderColor: cardBorder }]}> 
+              <ThemedText type="subtitle" style={styles.currentClassTitle}>
+                Departure Status
+              </ThemedText>
+              {departureStatus.leaveTimeMinutes !== null ? (
+                <>
+                  <ThemedText style={styles.className}>
+                    Leave Time: {formatMinutesToTime(departureStatus.leaveTimeMinutes)}
+                  </ThemedText>
+                  <ThemedText style={styles.classMeta}>{departureStatus.statusMessage}</ThemedText>
+                </>
+              ) : (
+                <ThemedText style={styles.emptyDay}>No departure status available</ThemedText>
               )}
             </View>
 
