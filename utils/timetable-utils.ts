@@ -1,3 +1,5 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
 // This shared utility holds the timetable math that both screens need.
 // It also keeps one live timetable source in memory so HomeScreen and
 // TimetableScreen read the same up-to-date classes.
@@ -64,8 +66,62 @@ export const INITIAL_WEEKLY_TIMETABLE: DaySchedule[] = [
 
 export const WEEKDAYS = INITIAL_WEEKLY_TIMETABLE.map((entry) => entry.day);
 
+const STORAGE_KEY = 'smart-class-navigation.timetable';
+
 let timetableSnapshot: DaySchedule[] = structuredClone(INITIAL_WEEKLY_TIMETABLE);
 const listeners = new Set<() => void>();
+
+function isValidTimetable(value: unknown): value is DaySchedule[] {
+  return Array.isArray(value) && value.every((entry) => {
+    return (
+      typeof entry === 'object' &&
+      entry !== null &&
+      typeof (entry as { day?: unknown }).day === 'string' &&
+      Array.isArray((entry as { classes?: unknown }).classes) &&
+      ((entry as { classes?: unknown[] }).classes ?? []).every((classItem) => {
+        return (
+          typeof classItem === 'object' &&
+          classItem !== null &&
+          typeof (classItem as { id?: unknown }).id === 'string' &&
+          typeof (classItem as { name?: unknown }).name === 'string'
+        );
+      })
+    );
+  });
+}
+
+async function saveTimetableToStorage(nextTimetable: DaySchedule[]): Promise<void> {
+  try {
+    // Saving keeps the latest timetable on the device even after the app closes.
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(nextTimetable));
+  } catch (error) {
+    // If storage fails, the app should still keep working with the in-memory list.
+    console.warn('Failed to save timetable:', error);
+  }
+}
+
+export async function loadTimetableFromStorage(): Promise<void> {
+  try {
+    // Loading restores the saved schedule automatically when the app starts.
+    const savedValue = await AsyncStorage.getItem(STORAGE_KEY);
+    if (!savedValue) {
+      return;
+    }
+
+    const parsedValue = JSON.parse(savedValue) as unknown;
+    if (!isValidTimetable(parsedValue)) {
+      // If the saved data is missing or corrupted, fall back to the default timetable.
+      setTimetableSnapshot(structuredClone(INITIAL_WEEKLY_TIMETABLE));
+      return;
+    }
+
+    setTimetableSnapshot(parsedValue);
+  } catch (error) {
+    // If loading fails, use the safe default timetable instead of crashing.
+    console.warn('Failed to load timetable:', error);
+    setTimetableSnapshot(structuredClone(INITIAL_WEEKLY_TIMETABLE));
+  }
+}
 
 export function getTimetableSnapshot(): DaySchedule[] {
   return timetableSnapshot;
@@ -79,7 +135,13 @@ export function subscribeToTimetable(callback: () => void): () => void {
 export function setTimetableSnapshot(nextTimetable: DaySchedule[]): void {
   timetableSnapshot = structuredClone(nextTimetable);
   listeners.forEach((listener) => listener());
+
+  // Save every change so the latest timetable is still available after restart.
+  void saveTimetableToStorage(timetableSnapshot);
 }
+
+// Load the saved schedule as soon as the shared utility is used.
+void loadTimetableFromStorage();
 
 export function getCurrentWeekdayName(): string {
   const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
