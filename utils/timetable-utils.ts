@@ -68,7 +68,26 @@ export const WEEKDAYS = INITIAL_WEEKLY_TIMETABLE.map((entry) => entry.day);
 
 const STORAGE_KEY = 'smart-class-navigation.timetable';
 
-let timetableSnapshot: DaySchedule[] = structuredClone(INITIAL_WEEKLY_TIMETABLE);
+function cloneDeep<T>(value: T): T {
+  if (value === null || typeof value !== 'object') {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(cloneDeep) as unknown as T;
+  }
+
+  const clonedObject: Record<string, unknown> = {};
+  for (const key in value) {
+    if (Object.prototype.hasOwnProperty.call(value, key)) {
+      clonedObject[key] = cloneDeep((value as Record<string, unknown>)[key]);
+    }
+  }
+
+  return clonedObject as T;
+}
+
+let timetableSnapshot: DaySchedule[] = cloneDeep(INITIAL_WEEKLY_TIMETABLE);
 const listeners = new Set<() => void>();
 
 function isValidTimetable(value: unknown): value is DaySchedule[] {
@@ -111,7 +130,7 @@ export async function loadTimetableFromStorage(): Promise<void> {
     const parsedValue = JSON.parse(savedValue) as unknown;
     if (!isValidTimetable(parsedValue)) {
       // If the saved data is missing or corrupted, fall back to the default timetable.
-      setTimetableSnapshot(structuredClone(INITIAL_WEEKLY_TIMETABLE));
+      setTimetableSnapshot(cloneDeep(INITIAL_WEEKLY_TIMETABLE));
       return;
     }
 
@@ -119,7 +138,7 @@ export async function loadTimetableFromStorage(): Promise<void> {
   } catch (error) {
     // If loading fails, use the safe default timetable instead of crashing.
     console.warn('Failed to load timetable:', error);
-    setTimetableSnapshot(structuredClone(INITIAL_WEEKLY_TIMETABLE));
+    setTimetableSnapshot(cloneDeep(INITIAL_WEEKLY_TIMETABLE));
   }
 }
 
@@ -133,7 +152,7 @@ export function subscribeToTimetable(callback: () => void): () => void {
 }
 
 export function setTimetableSnapshot(nextTimetable: DaySchedule[]): void {
-  timetableSnapshot = structuredClone(nextTimetable);
+  timetableSnapshot = cloneDeep(nextTimetable);
   listeners.forEach((listener) => listener());
 
   // Save every change so the latest timetable is still available after restart.
