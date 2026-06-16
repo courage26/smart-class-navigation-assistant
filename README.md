@@ -61,19 +61,19 @@
 
 
 ## 시간표 화면
-![시간표 화면](documents/screenshots/timetable-screen.jpg)
+![시간표 화면](utils/documents/screenshots/timetable-screen.jpg)
 
 
 ## 수업 추가 화면
-![수업 추가 화면](documents/screenshots/add-class-form.jpg)
+![수업 추가 화면](utils/documents/screenshots/add-class-form.jpg)
 
 
 ## 수업 정보 카드
-![수업 정보 카드](documents/screenshots/timetable-cards.jpg)
+![수업 정보 카드](utils/documents/screenshots/timetable-cards.jpg)
 
 
 ## 출발 시간 안내
-![출발 시간 안내](documents/screenshots/departure-status-card.jpg)
+![출발 시간 안내](utils/documents/screenshots/departure-status-card.jpg)
 
 
 ### 실행 방법
