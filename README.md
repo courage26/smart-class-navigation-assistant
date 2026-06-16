@@ -57,7 +57,7 @@
 ### 앱 실행 사진
 
 ## 홈 화면
-![홈 화면](documents/screenshots/home-screen.jpg)
+![홈 화면](utils/documents/screenshots/home-screen.jpg)
 
 
 ## 시간표 화면
